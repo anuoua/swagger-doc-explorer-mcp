@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { HttpMethod } from "../types.js";
 import { CHARACTER_LIMIT } from "../constants.js";
-import { isLoaded, getEndpoints, getEndpointDetail, getPathParameterNames, getSpec, getTags } from "../services/swagger-service.js";
+import { isLoaded, getEndpoints, getEndpointDetail, getEndpointDetailFull, getPathParameterNames, getSpec, getTags } from "../services/swagger-service.js";
 import { formatEndpointDetail } from "../formatters.js";
 
 export function registerPathsTools(server: McpServer) {
@@ -234,6 +234,73 @@ Error Handling:
         return {
           content: [{ type: "text", text: formatEndpointDetail(endpointInfo) }],
           structuredContent: endpointInfo,
+        };
+      } catch (error) {
+        return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }] };
+      }
+    }
+  );
+
+  server.registerTool(
+    "swagger_get_endpoint_full",
+    {
+      title: "Get Endpoint Details (All $ref Resolved)",
+      description: `Get detailed information about a specific API endpoint with all schema references ($ref) recursively resolved.
+
+Unlike swagger_get_endpoint, this tool resolves every $ref into its full schema definition. Parameters, request body schemas, and response schemas are expanded inline with no external references. Circular references are detected and marked.
+
+Use this when you need the complete endpoint definition in a single call, without needing to follow $ref links manually.
+
+Args:
+  - spec_name (string): Name of the previously loaded spec
+  - path (string): URL path of the endpoint (e.g., "/pets/{petId}")
+  - method (string): HTTP method (get, post, put, patch, delete, options, head)
+
+Returns:
+  Full endpoint details with all $ref resolved recursively.
+
+Examples:
+  - Use when: "Show me everything about GET /pets/{petId} with all schemas expanded" -> params with spec_name="<name>", path="/pets/{petId}", method="get"
+  - Use when: "Give me the full request body schema for creating a user" -> params with spec_name="<name>", path="/users", method="post"
+
+Error Handling:
+  - Returns error if the spec name has not been loaded
+  - Returns error if the path or method is not found, with suggestions`,
+      inputSchema: z.object({
+        spec_name: z.string().min(1).describe("Name of the previously loaded OpenAPI/Swagger spec (use swagger_list_loaded to see available names)"),
+        path: z.string().describe("URL path of the endpoint (e.g., '/pets/{petId}', '/users', '/store/order'). Must start with '/'."),
+        method: z.enum(["get", "post", "put", "patch", "delete", "options", "head"]).describe("HTTP method (get, post, put, patch, delete, options, head)"),
+      }).strict(),
+      annotations: {
+        readOnlyHint: true,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false,
+      },
+    },
+    async (params) => {
+      try {
+        if (!isLoaded(params.spec_name)) {
+          return { content: [{ type: "text", text: `Error: Spec '${params.spec_name}' has not been loaded yet. Use swagger_load_spec to load it first.` }] };
+        }
+
+        const detail = getEndpointDetailFull(params.spec_name, params.path, params.method as HttpMethod);
+        if (!detail) {
+          const allEndpoints = getEndpoints(params.spec_name);
+          const similarPaths = allEndpoints
+            .filter((ep) => ep.path.includes(params.path) || params.path.includes(ep.path))
+            .slice(0, 5);
+
+          let suggestion = "";
+          if (similarPaths.length > 0) {
+            suggestion = `\n\nDid you mean one of these?\n${similarPaths.map((ep) => `  - ${ep.method.toUpperCase()} ${ep.path}`).join("\n")}`;
+          }
+          return { content: [{ type: "text", text: `Error: No ${params.method.toUpperCase()} operation found for path '${params.path}'.${suggestion}` }] };
+        }
+
+        return {
+          content: [{ type: "text", text: formatEndpointDetail(detail as Parameters<typeof formatEndpointDetail>[0]) }],
+          structuredContent: detail,
         };
       } catch (error) {
         return { content: [{ type: "text", text: error instanceof Error ? error.message : String(error) }] };

@@ -376,6 +376,122 @@ export function resolveRef(ref: string, name: string): unknown {
   return current;
 }
 
+function deepResolveSchema(schema: SchemaObject, specName: string, visited: Set<string>): SchemaObject {
+  if (!schema || typeof schema !== "object") return schema;
+
+  const ref = schema.$ref;
+  if (ref) {
+    if (visited.has(ref)) {
+      return { $ref: ref, description: `(circular reference to ${ref})` };
+    }
+    visited.add(ref);
+    const resolved = resolveRef(ref, specName);
+    if (resolved && typeof resolved === "object" && !Array.isArray(resolved)) {
+      const base = deepResolveSchema(resolved as SchemaObject, specName, visited);
+      const merged: SchemaObject = { ...base };
+      for (const key of Object.keys(schema)) {
+        if (key !== "$ref") {
+          merged[key] = (schema as Record<string, unknown>)[key];
+        }
+      }
+      return merged;
+    }
+    return schema;
+  }
+
+  const result: Record<string, unknown> = {};
+  for (const [key, val] of Object.entries(schema)) {
+    if (key === "properties" && val && typeof val === "object") {
+      const resolvedProps: Record<string, SchemaObject> = {};
+      for (const [propName, propSchema] of Object.entries(val as Record<string, SchemaObject>)) {
+        resolvedProps[propName] = deepResolveSchema(propSchema, specName, new Set(visited));
+      }
+      result[key] = resolvedProps;
+    } else if ((key === "items" || key === "additionalProperties") && val && typeof val === "object" && !Array.isArray(val)) {
+      result[key] = deepResolveSchema(val as SchemaObject, specName, new Set(visited));
+    } else if (["oneOf", "anyOf", "allOf"].includes(key) && Array.isArray(val)) {
+      result[key] = val.map((s: SchemaObject) => deepResolveSchema(s, specName, new Set(visited)));
+    } else {
+      result[key] = val;
+    }
+  }
+
+  return result as SchemaObject;
+}
+
+export function resolveSchemaRefs(schema: SchemaObject, specName: string): SchemaObject {
+  return deepResolveSchema(schema, specName, new Set());
+}
+
+export function getEndpointDetailFull(name: string, path: string, method: HttpMethod): Record<string, unknown> | null {
+  const store = specStore.get(name);
+  if (!store) return null;
+
+  const pathItem = store.spec.paths[path];
+  if (!pathItem) return null;
+
+  const operation = (pathItem as Record<string, unknown>)[method] as OperationObject | undefined;
+  if (!operation) return null;
+
+  const paramNames = getPathParameterNames(path);
+  const mergedParameters = [
+    ...paramNames.map((n) => {
+      const existing = (operation.parameters || []).find((p) => p.name === n);
+      if (existing) return existing;
+      return { name: n, in: "path" as const, required: true, description: `Path parameter: ${n}`, schema: { type: "string" } };
+    }),
+    ...(operation.parameters || []).filter((p) => !paramNames.includes(p.name)),
+  ];
+
+  const endpointInfo: Record<string, unknown> = {
+    path,
+    method,
+    summary: operation.summary,
+    description: operation.description,
+    operationId: operation.operationId,
+    tags: operation.tags || [],
+    deprecated: operation.deprecated || false,
+    parameters: mergedParameters.map((p) => {
+      const resolved = { ...p };
+      if (resolved.schema) resolved.schema = resolveSchemaRefs(resolved.schema, name);
+      return resolved;
+    }),
+    requestBody: operation.requestBody
+      ? {
+          description: operation.requestBody.description,
+          required: operation.requestBody.required,
+          content: Object.fromEntries(
+            Object.entries(operation.requestBody.content).map(([ct, mt]) => [
+              ct,
+              { schema: mt.schema ? resolveSchemaRefs(mt.schema, name) : undefined },
+            ])
+          ),
+        }
+      : undefined,
+    responses: operation.responses
+      ? Object.fromEntries(
+          Object.entries(operation.responses).map(([code, resp]) => [
+            code,
+            {
+              description: resp.description,
+              content: resp.content
+                ? Object.fromEntries(
+                    Object.entries(resp.content).map(([ct, mt]) => [
+                      ct,
+                      { schema: mt.schema ? resolveSchemaRefs(mt.schema, name) : undefined },
+                    ])
+                  )
+                : undefined,
+            },
+          ])
+        )
+      : undefined,
+    security: operation.security,
+  };
+
+  return endpointInfo;
+}
+
 export function getServerUrl(name: string): string {
   const store = specStore.get(name);
   if (!store) return "";

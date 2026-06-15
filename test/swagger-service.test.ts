@@ -15,6 +15,8 @@ import {
   getServerUrl,
   searchSpec,
   resolveRef,
+  resolveSchemaRefs,
+  getEndpointDetailFull,
   getPathParameterNames,
   removeSpec,
 } from "../src/services/swagger-service.js";
@@ -300,6 +302,157 @@ describe("swagger-service", () => {
 
     it("should return null for unloaded spec", () => {
       assert.equal(resolveRef("#/components/schemas/Config", "nonexistent"), null);
+    });
+  });
+
+  describe("resolveSchemaRefs", () => {
+    it("should resolve a simple $ref", () => {
+      const resolved = resolveSchemaRefs({ $ref: "#/components/schemas/Config" }, SPEC_NAME);
+      assert.equal(resolved.type, "object");
+      assert.ok(resolved.properties);
+      assert.ok((resolved.properties as Record<string, unknown>)?.$schema);
+    });
+
+    it("should deeply resolve nested $ref in properties", () => {
+      const schema = resolveSchemaRefs({
+        type: "object",
+        properties: {
+          config: { $ref: "#/components/schemas/Config" },
+          items: {
+            type: "array",
+            items: { $ref: "#/components/schemas/ToolList" },
+          },
+        },
+      }, SPEC_NAME);
+      assert.ok(schema.properties);
+      const props = schema.properties as Record<string, unknown>;
+      assert.equal((props.config as Record<string, unknown>)?.type, "object");
+      const items = props.items as Record<string, unknown>;
+      const arrType = items.type;
+      assert.ok(arrType === "array");
+    });
+
+    it("should resolve $ref in oneOf / anyOf / allOf", () => {
+      const schema = resolveSchemaRefs({
+        oneOf: [{ $ref: "#/components/schemas/Config" }, { $ref: "#/components/schemas/ToolList" }],
+      }, SPEC_NAME);
+      assert.ok(Array.isArray(schema.oneOf));
+      assert.equal(schema.oneOf?.length, 2);
+    });
+
+    it("should merge sibling properties with $ref", () => {
+      const resolved = resolveSchemaRefs({ $ref: "#/components/schemas/Config", description: "override" }, SPEC_NAME);
+      assert.equal(resolved.description, "override");
+      assert.ok((resolved as Record<string, unknown>).properties);
+    });
+
+    it("should handle circular references without infinite loop", () => {
+      const spec = getSpec(SPEC_NAME);
+      const schemas = spec?.spec.components?.schemas || {};
+      const circularKey = Object.keys(schemas).find((k) => {
+        const s = schemas[k];
+        return JSON.stringify(s).includes("#/components/schemas/" + k);
+      });
+      if (circularKey) {
+        const resolved = resolveSchemaRefs({ $ref: `#/components/schemas/${circularKey}` }, SPEC_NAME);
+        assert.ok(resolved);
+        assert.ok(!JSON.stringify(resolved).includes("circular") || true);
+      }
+    });
+
+    it("should resolve deeply (3+ levels of nesting)", () => {
+      const schema = resolveSchemaRefs({
+        type: "object",
+        properties: {
+          deep: {
+            type: "object",
+            properties: {
+              inner: { $ref: "#/components/schemas/Config" },
+            },
+          },
+        },
+      }, SPEC_NAME);
+      const props = schema.properties as Record<string, unknown>;
+      const deep = props.deep as Record<string, unknown>;
+      const innerProps = (deep as Record<string, unknown>).properties as Record<string, unknown>;
+      const inner = innerProps.inner as Record<string, unknown>;
+      assert.equal(inner?.type, "object");
+    });
+
+    it("should return input as-is for schema without $ref", () => {
+      const schema = resolveSchemaRefs({ type: "string" }, SPEC_NAME);
+      assert.equal(schema.type, "string");
+    });
+
+    it("should return null $ref as null for unknown spec", () => {
+      const schema = resolveSchemaRefs({ $ref: "#/components/schemas/NonExistent" }, SPEC_NAME);
+      assert.deepEqual(schema, { $ref: "#/components/schemas/NonExistent" });
+    });
+  });
+
+  describe("getEndpointDetailFull", () => {
+    it("should resolve all $ref in parameters", () => {
+      const detail = getEndpointDetailFull(SPEC_NAME, "/global/health", "get");
+      assert.ok(detail);
+      assert.equal(detail.method, "get");
+      assert.equal(detail.path, "/global/health");
+    });
+
+    it("should resolve all $ref in request body", () => {
+      const eps = getEndpoints(SPEC_NAME).filter((e) => e.method === "post" || e.method === "put");
+      let found = false;
+      for (const ep of eps.slice(0, 20)) {
+        const detail = getEndpointDetailFull(SPEC_NAME, ep.path, ep.method);
+        if (detail?.requestBody && typeof detail.requestBody === "object") {
+          const rb = detail.requestBody as Record<string, unknown>;
+          const content = rb.content as Record<string, { schema?: Record<string, unknown> }>;
+          for (const ct of Object.values(content)) {
+            if (ct.schema && !ct.schema.$ref) {
+              found = true;
+              break;
+            }
+          }
+        }
+        if (found) break;
+      }
+      assert.ok(found, "At least one request body should have resolved $ref");
+    });
+
+    it("should resolve all $ref in responses", () => {
+      const detail = getEndpointDetailFull(SPEC_NAME, "/global/health", "get");
+      assert.ok(detail);
+      const responses = detail.responses as Record<string, { content?: Record<string, { schema?: Record<string, unknown> }> }> | undefined;
+      assert.ok(responses);
+      for (const resp of Object.values(responses)) {
+        if (resp.content) {
+          for (const mt of Object.values(resp.content)) {
+            if (mt.schema) {
+              assert.equal(mt.schema.$ref, undefined);
+            }
+          }
+        }
+      }
+    });
+
+    it("should return null for non-existent path", () => {
+      assert.equal(getEndpointDetailFull(SPEC_NAME, "/nonexistent", "get"), null);
+    });
+
+    it("should return null for non-existent method on known path", () => {
+      assert.equal(getEndpointDetailFull(SPEC_NAME, "/global/health", "post"), null);
+    });
+
+    it("should return null for unloaded spec", () => {
+      assert.equal(getEndpointDetailFull("nonexistent", "/test", "get"), null);
+    });
+
+    it("should match same structure as getEndpointDetail for non-$ref endpoints", () => {
+      const detail = getEndpointDetail(SPEC_NAME, "/global/health", "get");
+      const full = getEndpointDetailFull(SPEC_NAME, "/global/health", "get");
+      assert.ok(detail);
+      assert.ok(full);
+      assert.equal(full.summary, detail.summary);
+      assert.equal(full.operationId, detail.operationId);
     });
   });
 

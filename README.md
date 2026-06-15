@@ -16,6 +16,7 @@ Each loaded spec is identified by a unique name (`{title} v{version}`) assigned 
 | `swagger_list_tags` | List all tags/groups with endpoint counts. `spec_name` (required) |
 | `swagger_list_paths` | List endpoints, optionally filtered by `tag`. Supports `limit` (default 50) and `offset` pagination. `spec_name` (required) |
 | `swagger_get_endpoint` | Drill into a specific endpoint: `path`, `method`. `spec_name` (required) |
+| `swagger_get_endpoint_full` | Drill into endpoint with all `$ref` recursively resolved. Single-call completeness |
 | `swagger_list_schemas` | List all data models/schemas. Supports `limit` and `offset`. `spec_name` (required) |
 | `swagger_get_schema` | Get full details of a specific schema: `schema_name`. `spec_name` (required) |
 | `swagger_search` | Full-text search across endpoints and schemas: `query`. `spec_name` (required) |
