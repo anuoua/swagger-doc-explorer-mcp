@@ -1,37 +1,29 @@
 {
   "name": "swagger-doc-explorer-mcp",
-  "version": "0.0.3",
-  "description": "MCP server for progressive exploration of Swagger/OpenAPI documentation",
+  "version": "1.0.0",
+  "description": "Swagger/OpenAPI CLI explorer — inspect API docs, endpoints, schemas from URL or file",
   "type": "module",
-  "main": "dist/index.js",
   "bin": {
-    "swagger-doc-explorer-mcp": "dist/index.js"
+    "swagger-doc-explorer-mcp": "src/main.ts"
   },
   "files": [
-    "dist"
+    "src"
   ],
   "scripts": {
-    "start": "node dist/index.js",
-    "start:http": "SWAGGER_HTTP_PORT=3000 node dist/index.js",
-    "dev": "tsx watch src/index.ts",
-    "dev:http": "SWAGGER_HTTP_PORT=3000 tsx src/index.ts",
-    "build": "tsc",
-    "clean": "rm -rf dist",
-    "test": "node --import tsx --test test/**/*.test.ts",
-    "prepublishOnly": "npm run build && npm test"
+    "start": "node src/main.ts",
+    "preview": "node src/main.ts",
+    "test": "node --experimental-strip-types --test test/**/*.test.ts"
   },
   "keywords": [
-    "mcp",
-    "model-context-protocol",
     "swagger",
     "openapi",
     "api-explorer",
-    "documentation"
+    "cli"
   ],
   "author": "anuoua",
   "license": "MIT",
   "engines": {
-    "node": ">=18"
+    "node": ">=24"
   },
   "repository": {
     "type": "git",
@@ -41,18 +33,9 @@
   "bugs": {
     "url": "https://github.com/anuoua/swagger-doc-explorer-mcp/issues"
   },
-  "publishConfig": {
-    "access": "public"
-  },
   "packageManager": "pnpm@10.30.3",
-  "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.6.1",
-    "axios": "^1.7.9",
-    "zod": "^3.23.8"
-  },
   "devDependencies": {
     "@types/node": "^22.10.0",
-    "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   }
 }
