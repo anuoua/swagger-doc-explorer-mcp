@@ -11,6 +11,7 @@ export async function cmdEndpoint(
   full = false,
 ): Promise<string> {
   const spec = await loadSpec(source)
+  method = method.toLowerCase()
   const op = spec.paths[path]?.[method]
   if (!op) {
     const similar = getEndpoints(spec)
